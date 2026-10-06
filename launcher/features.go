@@ -469,8 +469,8 @@ func loadProfile() {
 const defaultUpdateRepo = "piercejonathan153-lab/MKU-KEL"
 
 var updateResult struct {
-	Tag, URL, Err string
-	Manual        bool
+	Tag, URL, Err, Notes string
+	Manual               bool
 }
 
 func updateRepo() string {
@@ -517,27 +517,48 @@ func checkUpdates(manual bool) {
 	}
 	go func() {
 		updateResult.Manual = manual
-		updateResult.Tag, updateResult.URL, updateResult.Err = "", "", ""
+		updateResult.Tag, updateResult.URL, updateResult.Err, updateResult.Notes = "", "", "", ""
 		c := &http.Client{Timeout: 8 * time.Second}
-		req, _ := http.NewRequest("GET", "https://api.github.com/repos/"+repo+"/releases/latest", nil)
-		req.Header.Set("Accept", "application/vnd.github+json")
-		req.Header.Set("User-Agent", "MKUKE-Launcher/"+appVersion)
-		resp, err := c.Do(req)
-		if err != nil {
-			updateResult.Err = err.Error()
-		} else {
+		get := func(url string, v any) error {
+			req, _ := http.NewRequest("GET", url, nil)
+			req.Header.Set("User-Agent", "MKUKE-Launcher/"+appVersion)
+			req.Header.Set("Cache-Control", "no-cache")
+			resp, err := c.Do(req)
+			if err != nil {
+				return err
+			}
 			defer resp.Body.Close()
+			if resp.StatusCode != 200 {
+				return fmt.Errorf("%s", resp.Status)
+			}
+			return json.NewDecoder(resp.Body).Decode(v)
+		}
+		// 1) latest.json in the repository (updated with every release)
+		var lj struct {
+			Version string `json:"version"`
+			URL     string `json:"url"`
+			Notes   string `json:"notes"`
+		}
+		err := get("https://raw.githubusercontent.com/"+repo+"/main/latest.json", &lj)
+		if err == nil && lj.Version != "" {
+			updateResult.Tag, updateResult.URL, updateResult.Notes = lj.Version, lj.URL, lj.Notes
+		} else {
+			// 2) fall back to GitHub Releases
 			var j struct {
 				Tag  string `json:"tag_name"`
 				HTML string `json:"html_url"`
 			}
-			if resp.StatusCode != 200 {
-				updateResult.Err = resp.Status
-			} else if err := json.NewDecoder(resp.Body).Decode(&j); err != nil {
+			if err2 := get("https://api.github.com/repos/"+repo+"/releases/latest", &j); err2 != nil {
+				if err == nil {
+					err = err2
+				}
 				updateResult.Err = err.Error()
 			} else {
 				updateResult.Tag, updateResult.URL = j.Tag, j.HTML
 			}
+		}
+		if updateResult.URL == "" {
+			updateResult.URL = "https://github.com/" + repo
 		}
 		pPostMessageW.Call(hMain, WM_APP_UPDATE, 0, 0)
 	}()
@@ -553,7 +574,11 @@ func showUpdateResult() {
 		return
 	}
 	if versionNewer(r.Tag, appVersion) {
-		if confirm(hMain, fmt.Sprintf("A new version of the launcher is available: %s (you have v%s).\n\nOpen the download page?", r.Tag, appVersion), appTitle) {
+		notes := ""
+		if r.Notes != "" {
+			notes = "\n\nWhat's new:\n" + r.Notes
+		}
+		if confirm(hMain, fmt.Sprintf("A new version of the launcher is available: v%s (you have v%s).%s\n\nOpen the download page?", strings.TrimPrefix(r.Tag, "v"), appVersion, notes), appTitle) {
 			pShellExecuteW.Call(hMain, u16p("open"), u16p(r.URL), 0, 0, SW_SHOW)
 		}
 	} else if r.Manual {

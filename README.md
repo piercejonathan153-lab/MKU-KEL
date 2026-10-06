@@ -2,7 +2,7 @@
 
 An unofficial modern launcher for **Mortal Kombat Komplete Edition** (PC, Steam v1.07).
 
-**[Download the latest release](https://github.com/piercejonathan153-lab/MKU-KEL/releases/latest)**
+**[Download v1.3.1](https://github.com/piercejonathan153-lab/MKU-KEL/raw/main/releases/MKUKE-Launcher-v1.3.1.zip)**  ·  all versions: [`releases/`](releases)
 
 ## Features
 - Vulkan (DXVK), DirectX 11 / 12 (dgVoodoo2) or the original DirectX 9 renderer
@@ -14,7 +14,7 @@ An unofficial modern launcher for **Mortal Kombat Komplete Edition** (PC, Steam 
 - Ryzen freeze fix, high CPU priority, disable fullscreen optimizations
 - Shareable settings profiles, DLC Manager shortcuts, diagnostics report
 - 12 themes (incl. dark modes), custom accent and text colours
-- Built-in update checker (uses this repository's releases)
+- Built-in update checker (reads `latest.json` in this repository)
 - Restore Vanilla: undo every change with one click
 
 ## Installation
@@ -39,3 +39,8 @@ GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui -s -w" -o MKLauncher.
 - Design inspired by BmLauncher by neatodev
 
 *Mortal Kombat is a trademark of Warner Bros. Entertainment Inc. This is an unofficial fan project, not affiliated with WB Games or NetherRealm Studios.*
+
+## Publishing an update
+1. Bump `appVersion` in `launcher/main.go`, build, and zip the release.
+2. Add the zip to `releases/` and update `latest.json` (`version`, `url`, `notes`).
+3. Push to `main` - every launcher picks it up on its next update check.
