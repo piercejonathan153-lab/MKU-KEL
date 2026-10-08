@@ -1,0 +1,109 @@
+/* MKUKE d3d9.dll proxy: runs the game on Microsoft's D3D9On12 layer (real Direct3D 12).
+   Build: see build.sh. 32-bit, no C runtime. */
+typedef unsigned int UINT; typedef int BOOL; typedef long HRESULT; typedef unsigned long DWORD;
+typedef void *HMODULE; typedef void *PVOID; typedef const char *LPCSTR;
+#define WINAPI __stdcall
+__declspec(dllimport) HMODULE WINAPI LoadLibraryA(LPCSTR);
+__declspec(dllimport) void *WINAPI GetProcAddress(HMODULE, LPCSTR);
+__declspec(dllimport) UINT WINAPI GetSystemDirectoryA(char *, UINT);
+__declspec(dllimport) DWORD WINAPI GetEnvironmentVariableA(LPCSTR, char *, DWORD);
+__declspec(dllimport) void *WINAPI CreateFileA(LPCSTR, DWORD, DWORD, void *, DWORD, DWORD, void *);
+__declspec(dllimport) BOOL WINAPI WriteFile(void *, const void *, DWORD, DWORD *, void *);
+__declspec(dllimport) BOOL WINAPI CloseHandle(void *);
+__declspec(dllimport) DWORD WINAPI GetModuleFileNameA(HMODULE, char *, DWORD);
+__declspec(dllimport) BOOL WINAPI VirtualProtect(void *, unsigned long, DWORD, DWORD *);
+__declspec(dllimport) int __cdecl wsprintfA(char *, LPCSTR, ...);
+
+typedef struct { BOOL Enable9On12; void *pD3D12Device; void *ppD3D12Queues[2]; UINT NumQueues; UINT NodeMask; } D3D9ON12_ARGS;
+
+static HMODULE real;
+static int vsync = -1; /* -1 = leave to game */
+
+static void logline(const char *s) {
+    char path[300]; DWORD n = GetModuleFileNameA(0, path, 260), w; int i;
+    for (i = (int)n; i > 0 && path[i - 1] != '\\'; i--) ;
+    const char *f = "d3d9on12_proxy.log"; int j = 0; while (f[j]) { path[i + j] = f[j]; j++; } path[i + j] = 0;
+    void *h = CreateFileA(path, 4 /*FILE_APPEND_DATA*/, 1, 0, 4 /*OPEN_ALWAYS*/, 0x80, 0);
+    if (h == (void *)-1) return;
+    n = 0; while (s[n]) n++;
+    WriteFile(h, s, n, &w, 0); WriteFile(h, "\r\n", 2, &w, 0); CloseHandle(h);
+}
+
+static void load(void) {
+    if (real) return;
+    char p[300]; UINT n = GetSystemDirectoryA(p, 260);
+    const char *d = "\\d3d9.dll"; int i = 0; while (d[i]) { p[n + i] = d[i]; i++; } p[n + i] = 0;
+    real = LoadLibraryA(p);
+    char e[8]; DWORD k = GetEnvironmentVariableA("MKUKE_VSYNC", e, 8);
+    if (k) vsync = (e[0] == '1');
+    char buf[400]; wsprintfA(buf, "loaded %s -> %p, vsync=%d", p, real, vsync); logline(buf);
+}
+
+/* ---- force VSync by patching CreateDevice / CreateDeviceEx in the IDirect3D9(Ex) vtable ---- */
+typedef struct { UINT bw, bh, fmt, cnt, ms, msq, swap; void *hwnd; BOOL windowed, autodepth; UINT dfmt, flags, refresh, interval; } PP;
+typedef HRESULT (WINAPI *CD_t)(void *, UINT, UINT, void *, DWORD, PP *, void **);
+typedef HRESULT (WINAPI *CDX_t)(void *, UINT, UINT, void *, DWORD, PP *, void *, void **);
+static CD_t origCD; static CDX_t origCDX;
+static void fixpp(PP *pp) { if (pp && vsync >= 0) pp->interval = vsync ? 1 : 0x80000000u; }
+static HRESULT WINAPI hookCD(void *s, UINT a, UINT t, void *w, DWORD f, PP *pp, void **dev) {
+    fixpp(pp); HRESULT r = origCD(s, a, t, w, f, pp, dev);
+    char b[100]; wsprintfA(b, "CreateDevice hr=0x%08lx", r); logline(b); return r;
+}
+static HRESULT WINAPI hookCDX(void *s, UINT a, UINT t, void *w, DWORD f, PP *pp, void *fm, void **dev) {
+    fixpp(pp); HRESULT r = origCDX(s, a, t, w, f, pp, fm, dev);
+    char b[100]; wsprintfA(b, "CreateDeviceEx hr=0x%08lx", r); logline(b); return r;
+}
+static void hook(void *d3d, int ex) {
+    if (!d3d || vsync < 0) return;
+    void **vt = *(void ***)d3d; DWORD old;
+    if (VirtualProtect(vt, 21 * sizeof(void *), 0x40, &old)) {
+        if (vt[16] != (void *)hookCD) { origCD = (CD_t)vt[16]; vt[16] = (void *)hookCD; }
+        if (ex && vt[20] != (void *)hookCDX) { origCDX = (CDX_t)vt[20]; vt[20] = (void *)hookCDX; }
+        VirtualProtect(vt, 21 * sizeof(void *), old, &old);
+    }
+}
+
+typedef void *(WINAPI *C9On12_t)(UINT, D3D9ON12_ARGS *, UINT);
+typedef HRESULT (WINAPI *C9On12Ex_t)(UINT, D3D9ON12_ARGS *, UINT, void **);
+typedef void *(WINAPI *C9_t)(UINT);
+typedef HRESULT (WINAPI *C9Ex_t)(UINT, void **);
+
+void *WINAPI Direct3DCreate9(UINT sdk) {
+    load();
+    D3D9ON12_ARGS a = {1, 0, {0, 0}, 0, 0};
+    C9On12_t f = (C9On12_t)GetProcAddress(real, "Direct3DCreate9On12");
+    void *r = f ? f(sdk, &a, 1) : 0;
+    if (!r) { logline("Direct3DCreate9On12 failed, using normal D3D9"); r = ((C9_t)GetProcAddress(real, "Direct3DCreate9"))(sdk); }
+    else logline("Direct3DCreate9 -> D3D9On12 (Direct3D 12)");
+    hook(r, 0); return r;
+}
+HRESULT WINAPI Direct3DCreate9Ex(UINT sdk, void **out) {
+    load();
+    D3D9ON12_ARGS a = {1, 0, {0, 0}, 0, 0};
+    C9On12Ex_t f = (C9On12Ex_t)GetProcAddress(real, "Direct3DCreate9On12Ex");
+    HRESULT r = f ? f(sdk, &a, 1, out) : -1;
+    if (r < 0) { logline("Direct3DCreate9On12Ex failed, using normal D3D9Ex"); r = ((C9Ex_t)GetProcAddress(real, "Direct3DCreate9Ex"))(sdk, out); }
+    else logline("Direct3DCreate9Ex -> D3D9On12 (Direct3D 12)");
+    if (r >= 0) hook(*out, 1); return r;
+}
+
+/* ---- plain forwarders for everything else d3d9.dll exports ---- */
+#define FWD(name) static void *p_##name; \
+    __declspec(dllexport) __declspec(naked) void name(void) { __asm { jmp dword ptr [p_##name] } }
+#define FWDLIST X(D3DPERF_BeginEvent) X(D3DPERF_EndEvent) X(D3DPERF_GetStatus) X(D3DPERF_QueryRepeatFrame) \
+    X(D3DPERF_SetMarker) X(D3DPERF_SetOptions) X(D3DPERF_SetRegion) X(DebugSetLevel) X(DebugSetMute) \
+    X(Direct3DShaderValidatorCreate9) X(PSGPError) X(PSGPSampleTexture) X(Direct3D9EnableMaximizedWindowedModeShim) \
+    X(Direct3DCreate9On12) X(Direct3DCreate9On12Ex)
+#define X(n) FWD(n)
+FWDLIST
+#undef X
+
+BOOL WINAPI DllMain(HMODULE h, DWORD reason, void *r) {
+    if (reason == 1) {
+        load();
+#define X(n) p_##n = GetProcAddress(real, #n);
+        FWDLIST
+#undef X
+    }
+    return 1;
+}
