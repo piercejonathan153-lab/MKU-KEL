@@ -44,17 +44,45 @@ typedef struct { UINT bw, bh, fmt, cnt, ms, msq, swap; void *hwnd; BOOL windowed
 typedef HRESULT (WINAPI *CD_t)(void *, UINT, UINT, void *, DWORD, PP *, void **);
 typedef HRESULT (WINAPI *CDX_t)(void *, UINT, UINT, void *, DWORD, PP *, void *, void **);
 static CD_t origCD; static CDX_t origCDX;
-static void fixpp(PP *pp) { if (pp && vsync >= 0) pp->interval = vsync ? 1 : 0x80000000u; }
+static void fixpp(PP *pp) {
+    if (!pp) return;
+    if (vsync >= 0) pp->interval = vsync ? 1 : 0x80000000u;
+    char b[300]; wsprintfA(b, "pp: %ux%u fmt=%u cnt=%u ms=%u swap=%u hwnd=%p windowed=%d autodepth=%d dfmt=%u flags=0x%x refresh=%u interval=0x%x",
+        pp->bw, pp->bh, pp->fmt, pp->cnt, pp->ms, pp->swap, pp->hwnd, pp->windowed, pp->autodepth, pp->dfmt, pp->flags, pp->refresh, pp->interval);
+    logline(b);
+}
+/* log the first presents of the device */
+typedef HRESULT (WINAPI *PR_t)(void *, void *, void *, void *, void *);
+typedef HRESULT (WINAPI *PRX_t)(void *, void *, void *, void *, void *, DWORD);
+static PR_t origPR; static PRX_t origPRX; static int npr, nfail;
+static void logpr(const char *w, HRESULT r) {
+    npr++;
+    if (r < 0 && nfail < 20) { nfail++; char b[100]; wsprintfA(b, "%s #%d FAILED hr=0x%08lx", w, npr, r); logline(b); }
+    else if (npr <= 3 || npr == 600) { char b[100]; wsprintfA(b, "%s #%d hr=0x%08lx", w, npr, r); logline(b); }
+}
+static HRESULT WINAPI hookPR(void *d, void *a, void *b, void *c, void *e) { HRESULT r = origPR(d, a, b, c, e); logpr("Present", r); return r; }
+static HRESULT WINAPI hookPRX(void *d, void *a, void *b, void *c, void *e, DWORD f) { HRESULT r = origPRX(d, a, b, c, e, f); logpr("PresentEx", r); return r; }
+static void hookdev(void *dev, int ex) {
+    if (!dev) return;
+    void **vt = *(void ***)dev; DWORD old;
+    if (VirtualProtect(vt, 122 * sizeof(void *), 0x40, &old)) {
+        if (vt[17] != (void *)hookPR) { origPR = (PR_t)vt[17]; vt[17] = (void *)hookPR; }
+        if (ex && vt[121] != (void *)hookPRX) { origPRX = (PRX_t)vt[121]; vt[121] = (void *)hookPRX; }
+        VirtualProtect(vt, 122 * sizeof(void *), old, &old);
+    }
+}
 static HRESULT WINAPI hookCD(void *s, UINT a, UINT t, void *w, DWORD f, PP *pp, void **dev) {
     fixpp(pp); HRESULT r = origCD(s, a, t, w, f, pp, dev);
-    char b[100]; wsprintfA(b, "CreateDevice hr=0x%08lx", r); logline(b); return r;
+    char b[100]; wsprintfA(b, "CreateDevice adapter=%u flags=0x%x hr=0x%08lx", a, f, r); logline(b);
+    if (r >= 0) hookdev(*dev, 0); return r;
 }
 static HRESULT WINAPI hookCDX(void *s, UINT a, UINT t, void *w, DWORD f, PP *pp, void *fm, void **dev) {
     fixpp(pp); HRESULT r = origCDX(s, a, t, w, f, pp, fm, dev);
-    char b[100]; wsprintfA(b, "CreateDeviceEx hr=0x%08lx", r); logline(b); return r;
+    char b[100]; wsprintfA(b, "CreateDeviceEx adapter=%u flags=0x%x fullscreenmode=%p hr=0x%08lx", a, f, fm, r); logline(b);
+    if (r >= 0) hookdev(*dev, 1); return r;
 }
 static void hook(void *d3d, int ex) {
-    if (!d3d || vsync < 0) return;
+    if (!d3d) return;
     void **vt = *(void ***)d3d; DWORD old;
     if (VirtualProtect(vt, 21 * sizeof(void *), 0x40, &old)) {
         if (vt[16] != (void *)hookCD) { origCD = (CD_t)vt[16]; vt[16] = (void *)hookCD; }
