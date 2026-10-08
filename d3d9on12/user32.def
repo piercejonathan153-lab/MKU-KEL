@@ -1,3 +1,7 @@
 LIBRARY user32.dll
 EXPORTS
 wsprintfA
+IsWindowVisible@4
+IsIconic@4
+GetWindowRect@8
+GetWindowLongA@8

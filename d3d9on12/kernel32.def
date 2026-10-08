@@ -9,3 +9,5 @@ WriteFile@20
 CloseHandle@4
 GetModuleFileNameA@12
 VirtualProtect@16
+CreateThread@24
+Sleep@4

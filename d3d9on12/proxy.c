@@ -12,6 +12,12 @@ __declspec(dllimport) BOOL WINAPI WriteFile(void *, const void *, DWORD, DWORD *
 __declspec(dllimport) BOOL WINAPI CloseHandle(void *);
 __declspec(dllimport) DWORD WINAPI GetModuleFileNameA(HMODULE, char *, DWORD);
 __declspec(dllimport) BOOL WINAPI VirtualProtect(void *, unsigned long, DWORD, DWORD *);
+__declspec(dllimport) void *WINAPI CreateThread(void *, unsigned long, DWORD (WINAPI *)(void *), void *, DWORD, DWORD *);
+__declspec(dllimport) void WINAPI Sleep(DWORD);
+__declspec(dllimport) BOOL WINAPI IsWindowVisible(void *);
+__declspec(dllimport) BOOL WINAPI IsIconic(void *);
+__declspec(dllimport) BOOL WINAPI GetWindowRect(void *, long *);
+__declspec(dllimport) long WINAPI GetWindowLongA(void *, int);
 __declspec(dllimport) int __cdecl wsprintfA(char *, LPCSTR, ...);
 
 typedef struct { BOOL Enable9On12; void *pD3D12Device; void *ppD3D12Queues[2]; UINT NumQueues; UINT NodeMask; } D3D9ON12_ARGS;
@@ -54,7 +60,22 @@ static void fixpp(PP *pp) {
 /* log the first presents of the device */
 typedef HRESULT (WINAPI *PR_t)(void *, void *, void *, void *, void *);
 typedef HRESULT (WINAPI *PRX_t)(void *, void *, void *, void *, void *, DWORD);
-static PR_t origPR; static PRX_t origPRX; static int npr, nfail;
+static PR_t origPR; static PRX_t origPRX; static volatile int npr, nfail, nreset; static void *gwnd;
+static DWORD WINAPI watch(void *p) {
+    int i;
+    for (i = 0; i < 30; i++) {
+        Sleep(2000);
+        long r[4] = {0, 0, 0, 0}; if (gwnd) GetWindowRect(gwnd, r);
+        char b[200]; wsprintfA(b, "t=%ds presents=%d resets=%d visible=%d iconic=%d style=0x%08lx exstyle=0x%08lx rect=%ld,%ld,%ld,%ld",
+            (i + 1) * 2, npr, nreset, gwnd ? IsWindowVisible(gwnd) : -1, gwnd ? IsIconic(gwnd) : -1,
+            gwnd ? GetWindowLongA(gwnd, -16) : 0, gwnd ? GetWindowLongA(gwnd, -20) : 0, r[0], r[1], r[2], r[3]);
+        logline(b);
+    }
+    return 0;
+}
+typedef HRESULT (WINAPI *RS_t)(void *, PP *);
+static RS_t origRS;
+static HRESULT WINAPI hookRS(void *d, PP *pp) { nreset++; fixpp(pp); HRESULT r = origRS(d, pp); char b[80]; wsprintfA(b, "Reset hr=0x%08lx", r); logline(b); return r; }
 static void logpr(const char *w, HRESULT r) {
     npr++;
     if (r < 0 && nfail < 20) { nfail++; char b[100]; wsprintfA(b, "%s #%d FAILED hr=0x%08lx", w, npr, r); logline(b); }
@@ -67,6 +88,7 @@ static void hookdev(void *dev, int ex) {
     void **vt = *(void ***)dev; DWORD old;
     if (VirtualProtect(vt, 122 * sizeof(void *), 0x40, &old)) {
         if (vt[17] != (void *)hookPR) { origPR = (PR_t)vt[17]; vt[17] = (void *)hookPR; }
+        if (vt[16] != (void *)hookRS) { origRS = (RS_t)vt[16]; vt[16] = (void *)hookRS; }
         if (ex && vt[121] != (void *)hookPRX) { origPRX = (PRX_t)vt[121]; vt[121] = (void *)hookPRX; }
         VirtualProtect(vt, 122 * sizeof(void *), old, &old);
     }
@@ -74,12 +96,12 @@ static void hookdev(void *dev, int ex) {
 static HRESULT WINAPI hookCD(void *s, UINT a, UINT t, void *w, DWORD f, PP *pp, void **dev) {
     fixpp(pp); HRESULT r = origCD(s, a, t, w, f, pp, dev);
     char b[100]; wsprintfA(b, "CreateDevice adapter=%u flags=0x%x hr=0x%08lx", a, f, r); logline(b);
-    if (r >= 0) hookdev(*dev, 0); return r;
+    if (r >= 0) { hookdev(*dev, 0); if (!gwnd) { gwnd = pp->hwnd ? pp->hwnd : w; DWORD id; CreateThread(0, 0, watch, 0, 0, &id); } } return r;
 }
 static HRESULT WINAPI hookCDX(void *s, UINT a, UINT t, void *w, DWORD f, PP *pp, void *fm, void **dev) {
     fixpp(pp); HRESULT r = origCDX(s, a, t, w, f, pp, fm, dev);
     char b[100]; wsprintfA(b, "CreateDeviceEx adapter=%u flags=0x%x fullscreenmode=%p hr=0x%08lx", a, f, fm, r); logline(b);
-    if (r >= 0) hookdev(*dev, 1); return r;
+    if (r >= 0) { hookdev(*dev, 1); if (!gwnd) { gwnd = pp->hwnd ? pp->hwnd : w; DWORD id; CreateThread(0, 0, watch, 0, 0, &id); } } return r;
 }
 static void hook(void *d3d, int ex) {
     if (!d3d) return;
