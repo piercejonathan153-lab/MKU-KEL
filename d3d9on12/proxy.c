@@ -53,6 +53,11 @@ static CD_t origCD; static CDX_t origCDX;
 static void fixpp(PP *pp) {
     if (!pp) return;
     if (vsync >= 0) pp->interval = vsync ? 1 : 0x80000000u;
+    /* D3D9On12's copy/discard present path shows nothing on screen: use the modern flip model instead */
+    if (pp->windowed && (pp->swap == 1 || pp->swap == 3) && pp->ms == 0) {
+        pp->swap = 5; /* D3DSWAPEFFECT_FLIPEX */
+        if (pp->cnt < 2) pp->cnt = 2;
+    }
     char b[300]; wsprintfA(b, "pp: %ux%u fmt=%u cnt=%u ms=%u swap=%u hwnd=%p windowed=%d autodepth=%d dfmt=%u flags=0x%x refresh=%u interval=0x%x",
         pp->bw, pp->bh, pp->fmt, pp->cnt, pp->ms, pp->swap, pp->hwnd, pp->windowed, pp->autodepth, pp->dfmt, pp->flags, pp->refresh, pp->interval);
     logline(b);
