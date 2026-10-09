@@ -25,6 +25,7 @@ typedef struct { BOOL Enable9On12; void *pD3D12Device; void *ppD3D12Queues[2]; U
 static HMODULE real;
 static int vsync = -1; /* -1 = leave to game */
 static int flipmode;
+static int lockfix = 1;
 
 static void logline(const char *s) {
     char path[300]; DWORD n = GetModuleFileNameA(0, path, 260), w; int i;
@@ -43,6 +44,7 @@ static void load(void) {
     real = LoadLibraryA(p);
     char e[8]; DWORD k = GetEnvironmentVariableA("MKUKE_VSYNC", e, 8);
     if (k) vsync = (e[0] == '1');
+    if (GetEnvironmentVariableA("MKUKE_NOLOCKFIX", e, 8)) lockfix = 0;
     char buf[400]; wsprintfA(buf, "loaded %s -> %p, vsync=%d", p, real, vsync); logline(buf);
 }
 
@@ -98,8 +100,23 @@ static HRESULT WINAPI hookPRX(void *d, void *a, void *b, void *c, void *e, DWORD
 /* log every distinct texture format/usage/pool the game creates */
 typedef HRESULT (WINAPI *CT_t)(void *, UINT, UINT, UINT, DWORD, UINT, UINT, void **, void *);
 static CT_t origCT; static unsigned seen[64]; static int nseen;
+/* texture LockRect: log flag usage and (experiment) drop DISCARD/NOOVERWRITE so partial updates keep their content */
+typedef HRESULT (WINAPI *LR_t)(void *, UINT, void *, const void *, DWORD);
+static LR_t origLR; static unsigned lrseen[16]; static int nlr;
+static HRESULT WINAPI hookLR(void *t, UINT lv, void *lr, const void *rc, DWORD fl) {
+    DWORD nf = lockfix ? (fl & ~(0x2000u /*DISCARD*/ | 0x1000u /*NOOVERWRITE*/)) : fl;
+    HRESULT r = origLR(t, lv, lr, rc, nf);
+    unsigned key = fl | (rc ? 0x80000000u : 0) | (r < 0 ? 0x40000000u : 0);
+    int i; for (i = 0; i < nlr && lrseen[i] != key; i++) ;
+    if (i == nlr && nlr < 16) { lrseen[nlr++] = key; char b[120]; wsprintfA(b, "LockRect flags=0x%x rect=%d -> 0x%x hr=0x%08lx", fl, rc != 0, nf, r); logline(b); }
+    return r;
+}
 static HRESULT WINAPI hookCT(void *d, UINT w, UINT h, UINT lv, DWORD usage, UINT fmt, UINT pool, void **tex, void *sh) {
     HRESULT r = origCT(d, w, h, lv, usage, fmt, pool, tex, sh);
+    if (r >= 0 && tex && *tex) {
+        void **vt = *(void ***)*tex; DWORD old;
+        if (vt[19] != (void *)hookLR && VirtualProtect(&vt[19], sizeof(void *), 0x40, &old)) { origLR = (LR_t)vt[19]; vt[19] = (void *)hookLR; VirtualProtect(&vt[19], sizeof(void *), old, &old); }
+    }
     unsigned key = (fmt & 0xFFFFFF) ^ (usage << 24) ^ (pool << 30) ^ ((r < 0) << 31);
     int i; for (i = 0; i < nseen && seen[i] != key; i++) ;
     if (i == nseen && nseen < 64) {
