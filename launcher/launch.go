@@ -70,17 +70,15 @@ func gcd(a, b int) int {
 // ---------------------------------------------------------------- game launch + borderless
 
 func runGameInner() {
-	cmd := exec.Command(filepath.Join(exeDir, "MKKE.exe"))
-	cmd.Dir = exeDir
-	if err := cmd.Start(); err != nil {
+	pid, err := startMKKE()
+	if err != nil {
 		msgBox(0, "Could not start MKKE.exe:\n\n"+err.Error(), appTitle, MB_ICONERROR)
 		return
 	}
-	logf("started MKKE.exe (pid %d), mode=%d renderer=%d", cmd.Process.Pid, settings.Mode, settings.Renderer)
+	logf("started MKKE.exe (pid %d), mode=%d renderer=%d", pid, settings.Mode, settings.Renderer)
 	if settings.HighPriority {
-		logf("high priority: %v", setHighPriority(uintptr(cmd.Process.Pid)))
+		logf("high priority: %v", setHighPriority(uintptr(pid)))
 	}
-	cmd.Process.Release()
 	if settings.Mode != 1 && !settings.Ryzen {
 		return
 	}
@@ -313,4 +311,72 @@ func runGame() {
 	c := exec.Command(ex, "--no-quick")
 	c.Dir = exeDir
 	c.Start()
+}
+
+var (
+	pShellExecuteExW = shell32.NewProc("ShellExecuteExW")
+	pGetProcessId    = kernel32.NewProc("GetProcessId")
+)
+
+type shellExecuteInfo struct {
+	Size       uint32
+	Mask       uint32
+	Hwnd       uintptr
+	Verb       *uint16
+	File       *uint16
+	Parameters *uint16
+	Directory  *uint16
+	Show       int32
+	InstApp    uintptr
+	IDList     uintptr
+	Class      *uint16
+	KeyClass   uintptr
+	HotKey     uint32
+	IconOrMon  uintptr
+	Process    uintptr
+}
+
+// startMKKE launches MKKE.exe and returns its process id. If Windows says the game needs
+// administrator rights (e.g. "Run as administrator" is ticked on MKKE.exe), it is started
+// through the shell instead, which shows the normal UAC prompt.
+func startMKKE() (int, error) {
+	exe := filepath.Join(exeDir, "MKKE.exe")
+	cmd := exec.Command(exe)
+	cmd.Dir = exeDir
+	err := cmd.Start()
+	if err == nil {
+		pid := cmd.Process.Pid
+		cmd.Process.Release()
+		return pid, nil
+	}
+	if errno, ok := underlyingErrno(err); !ok || errno != 740 { // ERROR_ELEVATION_REQUIRED
+		return 0, err
+	}
+	logf("MKKE.exe requires administrator rights - starting it through the shell (UAC)")
+	sei := shellExecuteInfo{Mask: 0x40 /*SEE_MASK_NOCLOSEPROCESS*/, Verb: u16("runas"), File: u16(exe), Directory: u16(exeDir), Show: SW_SHOW}
+	sei.Size = uint32(unsafe.Sizeof(sei))
+	if r, _, e := pShellExecuteExW.Call(uintptr(unsafe.Pointer(&sei))); r == 0 {
+		return 0, fmt.Errorf("MKKE.exe needs administrator rights and could not be started that way (%v).\n\nTry running the launcher as administrator, or untick \"Run this program as an administrator\" in MKKE.exe's Properties > Compatibility", e)
+	}
+	pid := 0
+	if sei.Process != 0 {
+		p, _, _ := pGetProcessId.Call(sei.Process)
+		pid = int(p)
+		pCloseHandle.Call(sei.Process)
+	}
+	return pid, nil
+}
+
+func underlyingErrno(err error) (syscall.Errno, bool) {
+	for e := err; e != nil; {
+		if n, ok := e.(syscall.Errno); ok {
+			return n, true
+		}
+		u, ok := e.(interface{ Unwrap() error })
+		if !ok {
+			return 0, false
+		}
+		e = u.Unwrap()
+	}
+	return 0, false
 }

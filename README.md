@@ -2,7 +2,7 @@
 
 An unofficial modern launcher for **Mortal Kombat Komplete Edition** (PC, Steam v1.07).
 
-**[Download v1.3.1](https://github.com/piercejonathan153-lab/MKU-KEL/raw/main/releases/MKUKE-Launcher-v1.3.1.zip)**  ·  all versions: [`releases/`](releases)
+**[Download v1.3.2](https://github.com/piercejonathan153-lab/MKU-KEL/raw/main/releases/MKUKE-Launcher-v1.3.2.zip)**  ·  all versions: [`releases/`](releases)
 
 ## Features
 - Vulkan (DXVK), DirectX 11 / 12 (dgVoodoo2) or the original DirectX 9 renderer
