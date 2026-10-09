@@ -24,6 +24,7 @@ typedef struct { BOOL Enable9On12; void *pD3D12Device; void *ppD3D12Queues[2]; U
 
 static HMODULE real;
 static int vsync = -1; /* -1 = leave to game */
+static int flipmode;
 
 static void logline(const char *s) {
     char path[300]; DWORD n = GetModuleFileNameA(0, path, 260), w; int i;
@@ -56,6 +57,7 @@ static void fixpp(PP *pp) {
     /* D3D9On12's copy/discard present path shows nothing on screen: use the modern flip model instead */
     if (pp->windowed && (pp->swap == 1 || pp->swap == 3) && pp->ms == 0) {
         pp->swap = 5; /* D3DSWAPEFFECT_FLIPEX */
+        flipmode = 1;
         if (pp->cnt < 2) pp->cnt = 2;
     }
     char b[300]; wsprintfA(b, "pp: %ux%u fmt=%u cnt=%u ms=%u swap=%u hwnd=%p windowed=%d autodepth=%d dfmt=%u flags=0x%x refresh=%u interval=0x%x",
@@ -86,8 +88,13 @@ static void logpr(const char *w, HRESULT r) {
     if (r < 0 && nfail < 20) { nfail++; char b[100]; wsprintfA(b, "%s #%d FAILED hr=0x%08lx", w, npr, r); logline(b); }
     else if (npr <= 3 || npr == 600) { char b[100]; wsprintfA(b, "%s #%d hr=0x%08lx", w, npr, r); logline(b); }
 }
-static HRESULT WINAPI hookPR(void *d, void *a, void *b, void *c, void *e) { HRESULT r = origPR(d, a, b, c, e); logpr("Present", r); return r; }
-static HRESULT WINAPI hookPRX(void *d, void *a, void *b, void *c, void *e, DWORD f) { HRESULT r = origPRX(d, a, b, c, e, f); logpr("PresentEx", r); return r; }
+
+static HRESULT WINAPI hookPR(void *d, void *a, void *b, void *c, void *e) {
+    if (npr < 3) { char x[160]; wsprintfA(x, "Present args src=%p dst=%p wnd=%p dirty=%p", a, b, c, e); logline(x); }
+    if (flipmode) { a = b = c = e = 0; } /* flip model only allows a plain full-window present */
+    HRESULT r = origPR(d, a, b, c, e); logpr("Present", r); return r;
+}
+static HRESULT WINAPI hookPRX(void *d, void *a, void *b, void *c, void *e, DWORD f) { if (flipmode) { a = b = c = e = 0; } HRESULT r = origPRX(d, a, b, c, e, f); logpr("PresentEx", r); return r; }
 static void hookdev(void *dev, int ex) {
     if (!dev) return;
     void **vt = *(void ***)dev; DWORD old;
