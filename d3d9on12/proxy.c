@@ -95,12 +95,29 @@ static HRESULT WINAPI hookPR(void *d, void *a, void *b, void *c, void *e) {
     HRESULT r = origPR(d, a, b, c, e); logpr("Present", r); return r;
 }
 static HRESULT WINAPI hookPRX(void *d, void *a, void *b, void *c, void *e, DWORD f) { if (flipmode) { a = b = c = e = 0; } HRESULT r = origPRX(d, a, b, c, e, f); logpr("PresentEx", r); return r; }
+/* log every distinct texture format/usage/pool the game creates */
+typedef HRESULT (WINAPI *CT_t)(void *, UINT, UINT, UINT, DWORD, UINT, UINT, void **, void *);
+static CT_t origCT; static unsigned seen[64]; static int nseen;
+static HRESULT WINAPI hookCT(void *d, UINT w, UINT h, UINT lv, DWORD usage, UINT fmt, UINT pool, void **tex, void *sh) {
+    HRESULT r = origCT(d, w, h, lv, usage, fmt, pool, tex, sh);
+    unsigned key = (fmt & 0xFFFFFF) ^ (usage << 24) ^ (pool << 30) ^ ((r < 0) << 31);
+    int i; for (i = 0; i < nseen && seen[i] != key; i++) ;
+    if (i == nseen && nseen < 64) {
+        seen[nseen++] = key;
+        char b[200]; char f[5] = {0};
+        if (fmt > 0xFFFF) { f[0] = (char)fmt; f[1] = (char)(fmt >> 8); f[2] = (char)(fmt >> 16); f[3] = (char)(fmt >> 24); }
+        wsprintfA(b, "CreateTexture fmt=%u%s%s%s usage=0x%x pool=%u size=%ux%u levels=%u hr=0x%08lx", fmt, f[0] ? " (" : "", f, f[0] ? ")" : "", usage, pool, w, h, lv, r);
+        logline(b);
+    }
+    return r;
+}
 static void hookdev(void *dev, int ex) {
     if (!dev) return;
     void **vt = *(void ***)dev; DWORD old;
     if (VirtualProtect(vt, 122 * sizeof(void *), 0x40, &old)) {
         if (vt[17] != (void *)hookPR) { origPR = (PR_t)vt[17]; vt[17] = (void *)hookPR; }
         if (vt[16] != (void *)hookRS) { origRS = (RS_t)vt[16]; vt[16] = (void *)hookRS; }
+        if (vt[23] != (void *)hookCT) { origCT = (CT_t)vt[23]; vt[23] = (void *)hookCT; }
         if (ex && vt[121] != (void *)hookPRX) { origPRX = (PRX_t)vt[121]; vt[121] = (void *)hookPRX; }
         VirtualProtect(vt, 122 * sizeof(void *), old, &old);
     }
