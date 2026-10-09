@@ -25,13 +25,17 @@ typedef struct { BOOL Enable9On12; void *pD3D12Device; void *ppD3D12Queues[2]; U
 static HMODULE real;
 static int vsync = -1; /* -1 = leave to game */
 static int flipmode;
-static int lockfix = 1;
+static int debuglog;
+static int lockfix = 0;
 
 static void logline(const char *s) {
     char path[300]; DWORD n = GetModuleFileNameA(0, path, 260), w; int i;
     for (i = (int)n; i > 0 && path[i - 1] != '\\'; i--) ;
     const char *f = "d3d9on12_proxy.log"; int j = 0; while (f[j]) { path[i + j] = f[j]; j++; } path[i + j] = 0;
-    void *h = CreateFileA(path, 4 /*FILE_APPEND_DATA*/, 1, 0, 4 /*OPEN_ALWAYS*/, 0x80, 0);
+    static int started; /* start a fresh log each game launch */
+    void *h = started ? CreateFileA(path, 4 /*FILE_APPEND_DATA*/, 1, 0, 4 /*OPEN_ALWAYS*/, 0x80, 0)
+                      : CreateFileA(path, 0x40000000 /*GENERIC_WRITE*/, 1, 0, 2 /*CREATE_ALWAYS*/, 0x80, 0);
+    started = 1;
     if (h == (void *)-1) return;
     n = 0; while (s[n]) n++;
     WriteFile(h, s, n, &w, 0); WriteFile(h, "\r\n", 2, &w, 0); CloseHandle(h);
@@ -44,7 +48,8 @@ static void load(void) {
     real = LoadLibraryA(p);
     char e[8]; DWORD k = GetEnvironmentVariableA("MKUKE_VSYNC", e, 8);
     if (k) vsync = (e[0] == '1');
-    if (GetEnvironmentVariableA("MKUKE_NOLOCKFIX", e, 8)) lockfix = 0;
+    if (GetEnvironmentVariableA("MKUKE_LOCKFIX", e, 8)) lockfix = 1;
+    if (GetEnvironmentVariableA("MKUKE_DEBUGLOG", e, 8)) debuglog = 1;
     char buf[400]; wsprintfA(buf, "loaded %s -> %p, vsync=%d", p, real, vsync); logline(buf);
 }
 
@@ -92,7 +97,7 @@ static void logpr(const char *w, HRESULT r) {
 }
 
 static HRESULT WINAPI hookPR(void *d, void *a, void *b, void *c, void *e) {
-    if (npr < 3) { char x[160]; wsprintfA(x, "Present args src=%p dst=%p wnd=%p dirty=%p", a, b, c, e); logline(x); }
+    if (debuglog && npr < 3) { char x[160]; wsprintfA(x, "Present args src=%p dst=%p wnd=%p dirty=%p", a, b, c, e); logline(x); }
     if (flipmode) { a = b = c = e = 0; } /* flip model only allows a plain full-window present */
     HRESULT r = origPR(d, a, b, c, e); logpr("Present", r); return r;
 }
@@ -108,7 +113,7 @@ static HRESULT WINAPI hookLR(void *t, UINT lv, void *lr, const void *rc, DWORD f
     HRESULT r = origLR(t, lv, lr, rc, nf);
     unsigned key = fl | (rc ? 0x80000000u : 0) | (r < 0 ? 0x40000000u : 0);
     int i; for (i = 0; i < nlr && lrseen[i] != key; i++) ;
-    if (i == nlr && nlr < 16) { lrseen[nlr++] = key; char b[120]; wsprintfA(b, "LockRect flags=0x%x rect=%d -> 0x%x hr=0x%08lx", fl, rc != 0, nf, r); logline(b); }
+    if (debuglog && i == nlr && nlr < 16) { lrseen[nlr++] = key; char b[120]; wsprintfA(b, "LockRect flags=0x%x rect=%d -> 0x%x hr=0x%08lx", fl, rc != 0, nf, r); logline(b); }
     return r;
 }
 static HRESULT WINAPI hookCT(void *d, UINT w, UINT h, UINT lv, DWORD usage, UINT fmt, UINT pool, void **tex, void *sh) {
@@ -119,7 +124,7 @@ static HRESULT WINAPI hookCT(void *d, UINT w, UINT h, UINT lv, DWORD usage, UINT
     }
     unsigned key = (fmt & 0xFFFFFF) ^ (usage << 24) ^ (pool << 30) ^ ((r < 0) << 31);
     int i; for (i = 0; i < nseen && seen[i] != key; i++) ;
-    if (i == nseen && nseen < 64) {
+    if (debuglog && i == nseen && nseen < 64) {
         seen[nseen++] = key;
         char b[200]; char f[5] = {0};
         if (fmt > 0xFFFF) { f[0] = (char)fmt; f[1] = (char)(fmt >> 8); f[2] = (char)(fmt >> 16); f[3] = (char)(fmt >> 24); }
@@ -142,12 +147,12 @@ static void hookdev(void *dev, int ex) {
 static HRESULT WINAPI hookCD(void *s, UINT a, UINT t, void *w, DWORD f, PP *pp, void **dev) {
     fixpp(pp); HRESULT r = origCD(s, a, t, w, f, pp, dev);
     char b[100]; wsprintfA(b, "CreateDevice adapter=%u flags=0x%x hr=0x%08lx", a, f, r); logline(b);
-    if (r >= 0) { hookdev(*dev, 0); if (!gwnd) { gwnd = pp->hwnd ? pp->hwnd : w; DWORD id; CreateThread(0, 0, watch, 0, 0, &id); } } return r;
+    if (r >= 0) { hookdev(*dev, 0); if (!gwnd) { gwnd = pp->hwnd ? pp->hwnd : w; DWORD id; if (debuglog) CreateThread(0, 0, watch, 0, 0, &id); } } return r;
 }
 static HRESULT WINAPI hookCDX(void *s, UINT a, UINT t, void *w, DWORD f, PP *pp, void *fm, void **dev) {
     fixpp(pp); HRESULT r = origCDX(s, a, t, w, f, pp, fm, dev);
     char b[100]; wsprintfA(b, "CreateDeviceEx adapter=%u flags=0x%x fullscreenmode=%p hr=0x%08lx", a, f, fm, r); logline(b);
-    if (r >= 0) { hookdev(*dev, 1); if (!gwnd) { gwnd = pp->hwnd ? pp->hwnd : w; DWORD id; CreateThread(0, 0, watch, 0, 0, &id); } } return r;
+    if (r >= 0) { hookdev(*dev, 1); if (!gwnd) { gwnd = pp->hwnd ? pp->hwnd : w; DWORD id; if (debuglog) CreateThread(0, 0, watch, 0, 0, &id); } } return r;
 }
 static void hook(void *d3d, int ex) {
     if (!d3d) return;

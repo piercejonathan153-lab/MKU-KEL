@@ -9,12 +9,15 @@ import (
 	"strings"
 )
 
-// Renderer indexes: 0 = DirectX 9 (no wrapper), 1 = dgVoodoo2 DX11, 2 = dgVoodoo2 DX12, 3 = DXVK (Vulkan)
+// Renderer indexes: 0 = DirectX 9 (no wrapper), 1 = dgVoodoo2 DX11, 2 = Microsoft D3D9On12 (DX12), 3 = DXVK (Vulkan)
 const rendVulkan = 3
+const rendD3D12 = 2
 
 func d3d9Active() string   { return filepath.Join(exeDir, "D3D9.dll") }
 func d3d9DgVoodoo() string { return filepath.Join(exeDir, "D3D9.dgvoodoo.dll") }
 func d3d9DXVK() string     { return filepath.Join(exeDir, "D3D9.dxvk.dll") }
+func d3d9On12() string     { return filepath.Join(exeDir, "D3D9.on12.dll") }
+func on12Available() bool  { return exists(d3d9On12()) }
 func dxvkConfPath() string { return filepath.Join(exeDir, "dxvk.conf") }
 
 func isDXVKFile(p string) bool {
@@ -34,7 +37,11 @@ func prepareRendererFiles() {
 		if !exists(p) {
 			continue
 		}
-		if isDXVKFile(p) {
+		if isOn12File(p) {
+			if !exists(d3d9On12()) {
+				copyFile(p, d3d9On12())
+			}
+		} else if isDXVKFile(p) {
 			if !exists(d3d9DXVK()) {
 				copyFile(p, d3d9DXVK())
 			}
@@ -54,7 +61,7 @@ func switchRenderer(r int) error {
 	act := d3d9Active()
 	ours := func() bool {
 		m := fileMD5(act)
-		return m != "" && (m == fileMD5(d3d9DgVoodoo()) || m == fileMD5(d3d9DXVK()))
+		return m != "" && (m == fileMD5(d3d9DgVoodoo()) || m == fileMD5(d3d9DXVK()) || m == fileMD5(d3d9On12()) || isOn12File(act))
 	}
 	if r == 0 {
 		if exists(act) {
@@ -70,6 +77,8 @@ func switchRenderer(r int) error {
 	src := d3d9DgVoodoo()
 	if r == rendVulkan {
 		src = d3d9DXVK()
+	} else if r == rendD3D12 {
+		src = d3d9On12()
 	}
 	if !exists(src) {
 		return fmt.Errorf("%s is missing from the game folder, so %s is not available", filepath.Base(src), rendererName(r))
@@ -123,4 +132,10 @@ func preferredRenderer() int {
 		return rendVulkan
 	}
 	return 1
+}
+
+// isOn12File recognises any build of the launcher's DirectX 12 proxy (older test builds included).
+func isOn12File(p string) bool {
+	b, err := os.ReadFile(p)
+	return err == nil && len(b) < 64*1024 && strings.Contains(string(b), "d3d9on12_proxy.log")
 }

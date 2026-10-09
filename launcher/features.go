@@ -247,6 +247,8 @@ func writeDiagnostics() (string, error) {
 		act = "DXVK (Vulkan)"
 	case m == fileMD5(d3d9DgVoodoo()):
 		act = "dgVoodoo2"
+	case m == fileMD5(d3d9On12()) || isOn12File(d3d9Active()):
+		act = "Microsoft D3D9On12 (DirectX 12)"
 	default:
 		act = "UNKNOWN D3D9.dll " + m
 	}
