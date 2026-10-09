@@ -72,11 +72,6 @@ func gcd(a, b int) int {
 func runGameInner() {
 	cmd := exec.Command(filepath.Join(exeDir, "MKKE.exe"))
 	cmd.Dir = exeDir
-	vs := "0"
-	if settings.VSync {
-		vs = "1"
-	}
-	cmd.Env = append(os.Environ(), "MKUKE_VSYNC="+vs) // read by the DirectX 12 proxy
 	if err := cmd.Start(); err != nil {
 		msgBox(0, "Could not start MKKE.exe:\n\n"+err.Error(), appTitle, MB_ICONERROR)
 		return

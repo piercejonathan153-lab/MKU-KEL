@@ -1,7 +1,3 @@
 *.exe
 *.zip
 !releases/*.zip
-*.dll
-*.obj
-*.lib
-*.exp

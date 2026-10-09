@@ -13,7 +13,7 @@ import (
 )
 
 const appTitle = "Mortal Kombat: Ultimate Komplete Edition Launcher"
-const appVersion = "1.4"
+const appVersion = "1.3.1"
 const wndClass = "MKUKELauncherWnd"
 
 var (
@@ -117,7 +117,7 @@ var (
 
 var (
 	modeNames     = []string{"Fullscreen", "Borderless", "Windowed"}
-	rendererNames = []string{"DirectX 9", "DirectX 11", "DirectX 12 (Beta)", "Vulkan (DXVK)"}
+	rendererNames = []string{"DirectX 9", "DirectX 11", "DirectX 12", "Vulkan (DXVK)"}
 	fpsNames      = []string{"Default (60)", "60 (dgVoodoo)", "45 (slow-mo)", "30 (slow-mo)"}
 	fpsValues     = []int{0, 60, 45, 30}
 	onOff         = []string{"Enabled", "Disabled"}
@@ -624,20 +624,12 @@ func updateHints() {
 	if r == rendVulkan {
 		enable(idForceAA, false)
 	}
-	if r == rendD3D12 { // Microsoft D3D9On12: only VSync is controllable
-		for _, id := range []int{idFPS, idForceAA, idForceAF, idWatermark} {
-			enable(id, false)
-		}
-	}
 	for _, c := range comboCtls {
 		pInvalidateRect.Call(c, 0, 0)
 	}
 	var d []string
-	if r == 1 && !dgvAvailable() {
-		d = append(d, "dgVoodoo2 (D3D9.dgvoodoo.dll + dgVoodoo.conf) is missing from the game folder, so DirectX 11 won't work.")
-	}
-	if r == rendD3D12 && !on12Available() {
-		d = append(d, "D3D9.on12.dll is missing from the game folder, so DirectX 12 won't work.")
+	if (r == 1 || r == 2) && !dgvAvailable() {
+		d = append(d, "dgVoodoo2 (D3D9.dgvoodoo.dll + dgVoodoo.conf) is missing from the game folder, so DirectX 11 / 12 won't work.")
 	}
 	if r == rendVulkan && !dxvkAvailable() {
 		d = append(d, "DXVK (D3D9.dxvk.dll) is missing from the game folder, so Vulkan won't work.")
@@ -645,11 +637,8 @@ func updateHints() {
 	if dx9 {
 		d = append(d, "DirectX 9 is the game's original renderer. Framerate limit, VSync and the overrides need DirectX 11 / 12 or Vulkan.")
 	}
-	if r == 1 {
-		d = append(d, "Known issue: with DirectX 11 some God of War content (Kratos, his stage) renders black. Vulkan and DirectX 12 don't have this problem.")
-	}
-	if r == rendD3D12 {
-		d = append(d, "Beta: Microsoft's DirectX 12 layer renders fights correctly, but soft glows in the menus show as hard shapes.")
+	if r == 1 || r == 2 {
+		d = append(d, "Known issue: with DirectX 11 / 12 some God of War content (Kratos, his stage) renders black. Vulkan doesn't have this problem.")
 	}
 	if sel(idFPS) >= 2 && !dx9 {
 		d = append(d, "The game's speed is tied to its frame rate: below 60 FPS, fights run in slow motion.")
@@ -1113,6 +1102,9 @@ func applyAll() error {
 
 	if c, err := LoadConf(confPath); err == nil {
 		api := "d3d11_fl11_0"
+		if settings.Renderer == 2 {
+			api = "d3d12_fl12_0"
+		}
 		tf := func(b bool) string {
 			if b {
 				return "true"
@@ -1171,7 +1163,7 @@ func addAllTips() {
 	tipFor(idMonitor, "Which monitor the game runs on. Borderless and Fullscreen open on this display.\n(Main) marks your primary monitor.", false)
 	tipFor(idRes, "The resolution the game renders at. For Borderless, your monitor's own resolution looks sharpest. Ultrawide resolutions (21:9, 32:9) are listed too.", false)
 	tipFor(idMode, "Fullscreen: classic exclusive fullscreen.\nBorderless: a window that covers the whole screen - alt-tab is instant and the game stays visible when you click another monitor.\nWindowed: a normal window with a title bar.", false)
-	tipFor(idRenderer, "DirectX 9: the game's original renderer.\nDirectX 11: runs the game through dgVoodoo2 (some God of War content renders black).\nDirectX 12 (Beta): Microsoft's own DirectX 9-on-12 layer built into Windows 10/11 - fights look right, menu glows are glitched.\nVulkan (DXVK): the most accurate - recommended.\nThe Vulkan overlay will still say D3D9: that's the game's own API, which DXVK translates to Vulkan.", false)
+	tipFor(idRenderer, "DirectX 9: the game's original renderer.\nDirectX 11 / 12: runs the game through dgVoodoo2 (some God of War content renders black).\nVulkan (DXVK): runs the game through DXVK - most accurate, recommended.\nThe Vulkan overlay will still say D3D9: that's the game's own API, which DXVK translates to Vulkan.", false)
 	tipFor(idVSync, "Enabled: syncs frames to your monitor's refresh rate - no screen tearing (recommended).\nDisabled: slightly lower input delay, but you may see tearing.\nNeeds DirectX 11 / 12 or Vulkan.", false)
 	tipFor(idFPS, "Default (60): the game's own built-in 60 FPS limit.\n60 (dgVoodoo): dgVoodoo2 also caps at 60 for steadier frame pacing - try this if you get micro stutters.\n45 (slow-mo): fights run at 75% speed. Only for very weak PCs.\n30 (slow-mo): fights run at half speed. Last resort.\nThe game's speed is tied to its frame rate, so it can't go above 60.", true)
 	tipFor(idLetter, "Enabled: cutscenes and menus keep their shape, with black bars where needed.\nDisabled: the picture is stretched to fill the screen.", false)
